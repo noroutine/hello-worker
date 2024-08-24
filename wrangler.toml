@@ -5,8 +5,19 @@ compatibility_date = "2024-08-06"
 
 workers_dev = false
 routes = [
+  { pattern = "dash.nrtn.me", custom_domain = true },
+  { pattern = "nrtn.me", custom_domain = true },
   { pattern = "hello.myworkers.cc", custom_domain = true },
 ]
+
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+ENVIRONMENT = "production"
+DASH = "dash.nrtn.me"
+# always, dash, never
+GOD_MODE = "dash"  
+TRACKER = "yes"
 
 # Automatically place your workloads in an optimal location to minimize latency.
 # If you are running back-end logic in a Worker, running it closer to your back-end infrastructure
@@ -57,7 +68,8 @@ routes = [
 [durable_objects]
 bindings = [
   { name = "MY_DURABLE_OBJECT", class_name = "MyDurableObject" },
-  { name = "COUNTERS", class_name = "Counter" }
+  { name = "COUNTERS", class_name = "Counter" },
+  { name = "SESSIONS", class_name = "Session" }
 ]
 
 # Durable Object migrations.
@@ -71,8 +83,8 @@ bindings = [
 # new_classes = [ "Counter" ]
 
 [[migrations]]
-tag = "v3"
-new_classes = [ "MyDurableObject" ]
+tag = "v4"
+new_classes = [ "Session" ]
 
 # Bind a Hyperdrive configuration. Use to accelerate access to your existing databases from Cloudflare Workers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#hyperdrive

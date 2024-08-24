@@ -9,8 +9,14 @@
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240806.0",
-    "typescript": "^5.5.2",
-    "wrangler": "^3.60.3"
+    "@cloudflare/workers-types": "^4.20240821.1",
+    "@types/cookie": "^0",
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^3.72.2"
+  },
+  "packageManager": "yarn@4.4.0",
+  "dependencies": {
+    "cookie": "^0.6.0"
   }
 }

@@ -18,28 +18,30 @@ export class MyDurableObject extends DurableObject {
     return await res.text();
   }
 
-  async getNames() {
-    let value = (await this.ctx.storage.get("value")) || [];
-    return value;
+  async get(key: string): Promise<string[]> {
+    return await this.ctx.storage.get(key) as string[] || [];
   }
 
-  async addName(name: string) {
-    let value: string[] = (await this.ctx.storage.get("value")) || [];
+  async contains(key: string, entry: string): Promise<boolean> {
+    return (await this.get(key)).includes(entry)
+  }
+
+  async add(key: string, name: string) {
+    let value: string[] = (await this.ctx.storage.get(key)) || [];
     if (!value.includes(name)) {
       value.push(name);
+      // You do not have to worry about a concurrent request having modified the value in storage.
+      // "input gates" will automatically protect against unwanted concurrency.
+      // Read-modify-write is safe.
+      await this.ctx.storage.put(key, value);
     }
-    // You do not have to worry about a concurrent request having modified the value in storage.
-    // "input gates" will automatically protect against unwanted concurrency.
-    // Read-modify-write is safe.
-    await this.ctx.storage.put("value", value);
     return value;
   }
 
-  async deleteName(name: string) {
-    let value: string[] = (await this.ctx.storage.get("value")) || [];
+  async delete(key: string, name: String) {
+    let value: string[] = (await this.ctx.storage.get(key)) || [];
     value = value.filter((n) => n !== name);
-    await this.ctx.storage.put("value", value);
+    await this.ctx.storage.put(key, value);
     return value;
   }
-
 }
