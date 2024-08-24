@@ -1,4 +1,6 @@
 // File: rbac.ts
+import { EventEmitter } from 'events';
+
 import * as ipaddr from 'ipaddr.js';
 
 export type Permission = string;
@@ -21,6 +23,15 @@ export interface Group extends Principal {
   name: string;
   members: Set<PrincipalId>;
   subgroups: Set<GroupId>;
+}
+
+/**
+ * Represents a role in the RBAC system.
+ */
+interface RoleDefinition {
+  name: Role;
+  permissions: Set<Permission>;
+  inherits?: Role[];
 }
 
 /**
@@ -159,6 +170,67 @@ export class ConsoleAuditLogger implements AuditLogger {
 }
 
 /**
+ * Audit event emitter for RBAC system.
+ */
+export class AuditEventEmitter extends EventEmitter {
+  emitPermissionCheck(logEntry: AuditLogEntry) {
+    this.emit('permissionCheck', logEntry);
+  }
+
+  emitRoleAssignment(principalId: PrincipalId, role: Role) {
+    this.emit('roleAssignment', { principalId, role, timestamp: new Date() });
+  }
+
+  emitRoleRevocation(principalId: PrincipalId, role: Role) {
+    this.emit('roleRevocation', { principalId, role, timestamp: new Date() });
+  }
+
+  emitPrincipalAddition(principal: Principal) {
+    this.emit('principalAddition', { principal, timestamp: new Date() });
+  }
+
+  emitPrincipalRemoval(principalId: PrincipalId) {
+    this.emit('principalRemoval', { principalId, timestamp: new Date() });
+  }
+
+  emitRoleCreation(role: Role, permissions: Permission[]) {
+    this.emit('roleCreation', { role, permissions, timestamp: new Date() });
+  }
+
+  /**
+   * Emits an event when a role is removed from the system.
+   * @param role - The role that was removed.
+   */
+  emitRoleRemoval(role: Role) {
+    this.emit('roleRemoval', { role, timestamp: new Date() });
+  }
+
+  emitGroupCreation(groupId: GroupId, name: string) {
+    this.emit('groupCreation', { groupId, name, timestamp: new Date() });
+  }
+
+  emitGroupAddition(groupId: GroupId, principalId: PrincipalId) {
+    this.emit('groupAddition', { groupId, principalId, timestamp: new Date() });
+  }
+
+  emitGroupRemoval(groupId: GroupId, principalId: PrincipalId) {
+    this.emit('groupRemoval', { groupId, principalId, timestamp: new Date() });
+  }
+
+  emitPermissionDenial(principalId: PrincipalId, permission: Permission) {
+    this.emit('permissionDenial', { principalId, permission, timestamp: new Date() });
+  }
+
+  emitPermissionDenialRemoval(principalId: PrincipalId, permission: Permission) {
+    this.emit('permissionDenialRemoval', { principalId, permission, timestamp: new Date() });
+  }
+
+  emitConditionAddition(principalId: PrincipalId, permission: Permission, conditionType: string) {
+    this.emit('conditionAddition', { principalId, permission, conditionType, timestamp: new Date() });
+  }
+}
+
+/**
  * Options for configuring the RBAC system.
  */
 export interface RBACOptions {
@@ -171,15 +243,14 @@ export interface RBACOptions {
  * Manages roles, permissions, principals (users, services, groups), and their relationships.
  */
 export class RBAC {
-  private roles: Map<Role, Set<Permission>>;
+  private roles: Map<Role, RoleDefinition>;
   private principalRoles: Map<PrincipalId, Set<Role>>;
   private principals: Map<PrincipalId, Principal>;
   private groups: Map<GroupId, Group>;
   private negativePermissions: Map<PrincipalId, Set<Permission>>;
   private conditionCheckers: Map<PrincipalId, Map<Permission, ConditionChecker[]>>;
-  private auditLogger?: AuditLogger;
   private logLevel: 'none' | 'basic' | 'detailed';
-
+  public auditEmitter: AuditEventEmitter;
 
   /**
    * Initializes a new instance of the RBAC class.
@@ -191,8 +262,8 @@ export class RBAC {
     this.groups = new Map();
     this.negativePermissions = new Map();
     this.conditionCheckers = new Map();
-    this.auditLogger = options?.auditLogger;
     this.logLevel = options?.logLevel ?? 'none';
+    this.auditEmitter = new AuditEventEmitter();
   }
 
   /**
@@ -200,21 +271,52 @@ export class RBAC {
    * @param options - The options to set or update.
    */
   setOptions(options: RBACOptions): void {
-    if (options.auditLogger !== undefined) {
-      this.auditLogger = options.auditLogger;
-    }
     if (options.logLevel !== undefined) {
       this.logLevel = options.logLevel;
     }
   }
   
   /**
-   * Adds a new role with associated permissions.
+   * Adds a new role with associated permissions and optional inheritance.
    * @param role - The name of the role to add.
    * @param permissions - An array of permissions to associate with the role.
+   * @param inherits - An optional array of roles that this role inherits from.
    */
-  addRole(role: Role, permissions: Permission[]): void {
-    this.roles.set(role, new Set(permissions));
+  addRole(role: Role, permissions: Permission[], inherits?: Role[]): void {
+    this.roles.set(role, {
+      name: role,
+      permissions: new Set(permissions),
+      inherits: inherits
+    });
+    this.auditEmitter.emitRoleCreation(role, permissions);
+  }
+
+  /**
+   * Removes a role from the system.
+   * @param role - The name of the role to remove.
+   * @returns True if the role was removed, false if it didn't exist.
+   */
+  removeRole(role: Role): boolean {
+    if (this.roles.delete(role)) {
+      // Remove the role from all principals
+      for (const [principalId, roles] of this.principalRoles) {
+        if (roles.delete(role)) {
+          this.auditEmitter.emitRoleRevocation(principalId, role);
+        }
+      }
+      // Remove the role from inheritance of other roles
+      for (const roleDefinition of this.roles.values()) {
+        if (roleDefinition.inherits) {
+          const index = roleDefinition.inherits.indexOf(role);
+          if (index > -1) {
+            roleDefinition.inherits.splice(index, 1);
+          }
+        }
+      }
+      this.auditEmitter.emitRoleRemoval(role);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -223,12 +325,26 @@ export class RBAC {
    */
   addPrincipal(principal: Principal): void {
     this.principals.set(principal.id, principal);
+    this.auditEmitter.emitPrincipalAddition(principal);
+  }
+
+  /**
+   * Removes a principal from the system.
+   * @param principalId - The ID of the principal to remove.
+   * @returns True if the principal was removed, false if it didn't exist.
+   */
+  removePrincipal(principalId: PrincipalId): boolean {
+    if (this.principals.delete(principalId)) {
+      this.auditEmitter.emitPrincipalRemoval(principalId);
+      return true;
+    }
+    return false;
   }
 
   /**
    * Assigns a role to a principal.
-   * @param principalId - The ID of the principal to assign the role to.
-   * @param role - The name of the role to assign.
+   * @param principalId - The ID of the principal.
+   * @param role - The role to assign.
    * @throws Error if the principal does not exist.
    */
   assignRole(principalId: PrincipalId, role: Role): void {
@@ -239,6 +355,22 @@ export class RBAC {
       this.principalRoles.set(principalId, new Set());
     }
     this.principalRoles.get(principalId)!.add(role);
+    this.auditEmitter.emitRoleAssignment(principalId, role);
+  }
+
+  /**
+   * Revokes a role from a principal.
+   * @param principalId - The ID of the principal.
+   * @param role - The role to revoke.
+   * @returns True if the role was revoked, false if the principal didn't have the role.
+   */
+  revokeRole(principalId: PrincipalId, role: Role): boolean {
+    const roles = this.principalRoles.get(principalId);
+    if (roles && roles.delete(role)) {
+      this.auditEmitter.emitRoleRevocation(principalId, role);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -319,6 +451,7 @@ export class RBAC {
     };
     this.groups.set(groupId, group);
     this.principals.set(groupId, group);
+    this.auditEmitter.emitGroupCreation(groupId, name);
   }
 
   /**
@@ -336,6 +469,7 @@ export class RBAC {
       throw new Error(`Principal with id ${principalId} does not exist`);
     }
     group.members.add(principalId);
+    this.auditEmitter.emitGroupAddition(groupId, principalId);
   }
 
   /**
@@ -353,6 +487,13 @@ export class RBAC {
     parentGroup.subgroups.add(childGroupId);
   }
 
+  removeFromGroup(groupId: GroupId, principalId: PrincipalId): void {
+    const group = this.groups.get(groupId);
+    if (group && group.members.delete(principalId)) {
+      this.auditEmitter.emitGroupRemoval(groupId, principalId);
+    }
+  }
+
   /**
    * Explicitly denies a specific permission to a principal.
    * @param principalId - The ID of the principal to deny the permission to.
@@ -367,6 +508,7 @@ export class RBAC {
       this.negativePermissions.set(principalId, new Set());
     }
     this.negativePermissions.get(principalId)!.add(permission);
+    this.auditEmitter.emitPermissionDenial(principalId, permission);
   }
 
   /**
@@ -376,8 +518,8 @@ export class RBAC {
    */
   removeDeniedPermission(principalId: PrincipalId, permission: Permission): void {
     const deniedPermissions = this.negativePermissions.get(principalId);
-    if (deniedPermissions) {
-      deniedPermissions.delete(permission);
+    if (deniedPermissions && deniedPermissions.delete(permission)) {
+      this.auditEmitter.emitPermissionDenialRemoval(principalId, permission);
     }
   }
 
@@ -396,10 +538,34 @@ export class RBAC {
       principalCheckers.set(permission, []);
     }
     principalCheckers.get(permission)!.push(checker);
+    this.auditEmitter.emitConditionAddition(principalId, permission, checker.constructor.name);
   }
 
   /**
-   * Checks if a principal has a specific permission, taking into account negative permissions and conditions.
+   * Gets all permissions for a role, including inherited permissions.
+   * @param role - The role to get permissions for.
+   * @returns A set of all permissions for the role.
+   */
+  private getRolePermissions(role: Role): Set<Permission> {
+    const roleDefinition = this.roles.get(role);
+    if (!roleDefinition) {
+      return new Set();
+    }
+
+    const permissions = new Set(roleDefinition.permissions);
+
+    if (roleDefinition.inherits) {
+      for (const inheritedRole of roleDefinition.inherits) {
+        const inheritedPermissions = this.getRolePermissions(inheritedRole);
+        inheritedPermissions.forEach(permission => permissions.add(permission));
+      }
+    }
+
+    return permissions;
+  }
+
+  /**
+   * Checks if a principal has a specific permission, taking into account role hierarchy, negative permissions, and conditions.
    * @param principalId - The ID of the principal to check.
    * @param permission - The permission to check for.
    * @param context - Additional context for condition checking (e.g., IP address, current time).
@@ -415,11 +581,11 @@ export class RBAC {
       reason = 'Explicitly denied';
       granted = false;
     } else {
-      // Check if the permission is granted by any role
+      // Check if the permission is granted by any role, including inherited roles
       const principalRoles = this.getPrincipalRoles(principalId);
       for (const role of principalRoles) {
-        const permissions = this.roles.get(role);
-        if (permissions && permissions.has(permission)) {
+        const rolePermissions = this.getRolePermissions(role);
+        if (rolePermissions.has(permission)) {
           granted = true;
           reason = `Granted by role: ${role}`;
           break;
@@ -447,7 +613,7 @@ export class RBAC {
     }
 
     // Log the permission check if auditing is enabled
-    if (this.auditLogger && this.logLevel !== 'none') {
+    if (this.logLevel !== 'none') {
       const logEntry: AuditLogEntry = {
         timestamp: new Date(),
         principalId,
@@ -456,7 +622,7 @@ export class RBAC {
         reason,
         ...(this.logLevel === 'detailed' ? { context } : {})
       };
-      this.auditLogger.log(logEntry);
+      this.auditEmitter.emitPermissionCheck(logEntry);
     }
 
     return granted;
@@ -468,9 +634,10 @@ export class RBAC {
    */
   static setupDefaultRoles(): RBAC {
     const rbac = new RBAC();
-    DEFAULT.roles.forEach((permissions, role) => {
-      rbac.addRole(role, permissions);
-    });
+    rbac.addRole('viewer', [DEFAULT.permissions.READ]);
+    rbac.addRole('editor', [DEFAULT.permissions.WRITE], ['viewer']);
+    rbac.addRole('manager', [DEFAULT.permissions.DELETE], ['editor']);
+    rbac.addRole('admin', [DEFAULT.permissions.ADMIN], ['manager']);
     return rbac;
   }
 }
