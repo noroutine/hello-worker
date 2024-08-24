@@ -12,7 +12,7 @@ export async function generateECKeyPair(): Promise<CryptoKeyPair> {
     },
     true,
     ['deriveKey', 'deriveBits']
-  );
+  ) as CryptoKeyPair;
 }
 
 /**
