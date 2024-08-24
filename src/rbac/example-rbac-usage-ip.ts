@@ -1,5 +1,4 @@
 // File: example-usage.ts
-import * as ipaddr from 'ipaddr.js';
 
 import { RBAC, Principal, User, DEFAULT, AdvancedIPChecker } from './rbac';
 

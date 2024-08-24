@@ -1,4 +1,5 @@
 import { SecureSession } from './../session';
+
 function ifGod(str: string, godMode: boolean): string {
     return godMode ? str : "";
 }
@@ -30,6 +31,7 @@ export function CounterView(session: SecureSession, names: string[], sessions: s
     ).join('')
 
     let currentSessionSnippet = `<p>Session ID: <code>${session.id}</code>, Persisted: <code>${session.persisted}</code></p>`
+    let currentSubscriptionSnippet = `<p>Subscription ID: <code>${session.subscription.id}</code>, Name: <code>${session.subscription.name}</code></p>`
     let sessionsListSnippet = sessions.length > 0 ? `<p>Known persisted sessions: <ul style="list-style: none; padding-left: 0;">${sessionsList}</ul></p>` : `<p>No persisted sessions</p>`
 
     let pixel = (tracker) ? `<img src="https://nrtn.me/${tracker}" />`: '';
@@ -108,7 +110,7 @@ export function CounterView(session: SecureSession, names: string[], sessions: s
     </style>
 </head>
 <body>
-    <h1>Counters</h1>
+    <h1><a href="/">Counters</a></h1>
     <p>Select a Durable Object to contact by using the <code>name</code> URL query string parameter, for example, <code>?name=A</code></p>
     <p>Controls below will do exactly that for you</p>
     <form action="/" method="get">
@@ -126,6 +128,7 @@ export function CounterView(session: SecureSession, names: string[], sessions: s
     </p>
     
     ${currentSessionSnippet}
+    ${currentSubscriptionSnippet}
     ${ifGod(sessionsListSnippet, godMode)}
 
     <script>

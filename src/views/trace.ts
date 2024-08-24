@@ -10,7 +10,8 @@ export function TraceView(data: string = ""): string {
     </style>
 </head>
 <body>
-    <h1>Counter Trace</h1>
+    <h1><a href="/">Counter Trace</a></h1>
+    <h1></h1>
     <pre>${data}</pre>
     <a href="/">Back</a>
 </html>

@@ -1,12 +1,103 @@
 // File: rbac.ts
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 import * as ipaddr from 'ipaddr.js';
 
-export type Permission = string;
+export const DEFAULT = {
+  permissions: {
+    READ: 'read',
+    WRITE: 'write',
+    DELETE: 'delete',
+    MANAGE: 'manage',
+    ADMIN: 'admin',
+  },
+  roles: Array.from<RoleDefinition>([
+    {
+      name: 'viewer',
+      permissions: new Set<Permission>([
+        { action: 'read', tenantId: '*', subscriptionId: '*', namespaceId: '*', resourceTypeId: '*', resourceId: '*', effect: 'allow' }
+      ])
+    },
+    {
+      name: 'editor',
+      permissions: new Set<Permission>([
+        { action: 'read', tenantId: '*', subscriptionId: '*', namespaceId: '*', resourceTypeId: '*', resourceId: '*', effect: 'allow' },
+        { action: 'write', tenantId: '*', subscriptionId: '*', namespaceId: '*', resourceTypeId: '*', resourceId: '*', effect: 'allow' }
+      ])
+    },
+    {
+      name: 'owner',
+      permissions: new Set<Permission>([
+        { action: 'delete', tenantId: '*', subscriptionId: '*', namespaceId: '*', resourceTypeId: '*', resourceId: '*', effect: 'allow' }
+      ]),
+      inherits: [ 'editor' ]
+    },
+    {
+      name: 'manager',
+      permissions: new Set<Permission>([
+        { action: 'manage', tenantId: '*', subscriptionId: '*', namespaceId: '*', resourceTypeId: '*', resourceId: '*', effect: 'allow' }
+      ]),
+      inherits: [ 'viewer' ]
+    },
+    {
+      name: 'admin',
+      permissions: new Set<Permission>([
+        { action: '*', tenantId: '*', subscriptionId: '*', namespaceId: '*', resourceTypeId: '*', resourceId: '*', effect: 'allow' }
+      ])
+    },
+  ])
+};
+
 export type Role = string;
+export type TenantId = string;
+export type SubscriptionId = string;
+export type NamespaceId = string;
 export type PrincipalId = string;
 export type GroupId = string;
+
+export interface Tenant {
+  id: TenantId;
+  name: string;
+}
+
+export interface Subscription {
+  id: SubscriptionId;
+  tenantId: TenantId;
+  name: string;
+}
+
+export interface Namespace {
+  id: NamespaceId;
+  name: string;
+}
+
+export interface Resource {
+  id: string;
+  tenantId: string;
+  subscriptionId: string;
+  namespaceId: string;
+  typeId: string;
+  parentId?: string;
+}
+
+export interface ResourceId {
+  tenantId: string;
+  subscriptionId: string;
+  namespaceId: string;
+  resourceTypeId: string;
+  resourceId: string;
+}
+
+export interface Permission {
+  action: string;
+  tenantId: string | '*';
+  subscriptionId: string | '*';
+  namespaceId: string | '*';
+  resourceTypeId: string | '*';
+  resourceId: string | '*';
+  effect: 'allow' | 'deny';
+  conditions?: ConditionChecker[];
+}
 
 export interface Principal {
   id: PrincipalId;
@@ -28,7 +119,7 @@ export interface Group extends Principal {
 /**
  * Represents a role in the RBAC system.
  */
-interface RoleDefinition {
+export interface RoleDefinition {
   name: Role;
   permissions: Set<Permission>;
   inherits?: Role[];
@@ -38,24 +129,33 @@ interface RoleDefinition {
  * Interface for conditional permission checkers.
  */
 export interface ConditionChecker {
-  check(principalId: PrincipalId, permission: Permission, context?: any): boolean;
+  check(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: any): boolean;
 }
 
 /**
  * Time-based condition checker implementation.
  */
 export class TimeBasedChecker implements ConditionChecker {
-  private startTime: number;
-  private endTime: number;
+  private startHour: number;
+  private endHour: number;
 
-  constructor(startTime: number, endTime: number) {
-    this.startTime = startTime;
-    this.endTime = endTime;
+  constructor(startHour: number, endHour: number) {
+    if (startHour < 0 || startHour > 23 || endHour < 0 || endHour > 23) {
+      throw new Error("Hours must be between 0 and 23");
+    }
+    this.startHour = startHour;
+    this.endHour = endHour;
   }
 
-  check(principalId: PrincipalId, permission: Permission): boolean {
-    const currentHour = new Date().getHours();
-    return currentHour >= this.startTime && currentHour < this.endTime;
+  check(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: { currentTime?: Date }): boolean {
+    const currentTime = context?.currentTime || new Date();
+    const currentHour = currentTime.getHours();
+
+    if (this.startHour <= this.endHour) {
+      return currentHour >= this.startHour && currentHour < this.endHour;
+    } else {
+      return currentHour >= this.startHour || currentHour < this.endHour;
+    }
   }
 }
 
@@ -69,7 +169,7 @@ export class IPBasedChecker implements ConditionChecker {
     this.allowedIPs = new Set(allowedIPs);
   }
 
-  check(principalId: PrincipalId, permission: Permission, context?: { ip: string }): boolean {
+  check(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: { ip: string }): boolean {
     if (!context || !context.ip) {
       return false; // If no IP is provided in the context, deny access
     }
@@ -109,34 +209,29 @@ export class AdvancedIPChecker implements ConditionChecker {
     return ip.kind() === subnet[0].kind() && ip.match(subnet[0], subnet[1]);
   }
 
-  check(principalId: PrincipalId, permission: Permission, context?: { ip: string }): boolean {
+  check(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: { ip: string }): boolean {
     if (!context || !context.ip) {
-      return false; // If no IP is provided in the context, deny access
+      return false;
     }
 
     const ip = ipaddr.parse(context.ip);
 
-    // Check if the IP is explicitly blocked
     if (this.blockedIPs.has(context.ip)) {
       return false;
     }
 
-    // Check if the IP is in a blocked subnet
     if (this.blockedSubnets.some(subnet => this.isIPInSubnet(ip, subnet))) {
       return false;
     }
 
-    // If there are no allowed IPs or subnets, allow by default
     if (this.allowedIPs.size === 0 && this.allowedSubnets.length === 0) {
       return true;
     }
 
-    // Check if the IP is explicitly allowed
     if (this.allowedIPs.has(context.ip)) {
       return true;
     }
 
-    // Check if the IP is in an allowed subnet
     return this.allowedSubnets.some(subnet => this.isIPInSubnet(ip, subnet));
   }
 }
@@ -144,13 +239,14 @@ export class AdvancedIPChecker implements ConditionChecker {
 /**
  * Represents an entry in the audit log.
  */
-export interface AuditLogEntry {
+interface AuditLogEntry {
   timestamp: Date;
   principalId: PrincipalId;
-  permission: Permission;
+  action: string;
+  resourceId?: ResourceId;
   granted: boolean;
-  context?: any;
   reason: string;
+  context?: any;
 }
 
 /**
@@ -173,8 +269,8 @@ export class ConsoleAuditLogger implements AuditLogger {
  * Audit event emitter for RBAC system.
  */
 export class AuditEventEmitter extends EventEmitter {
-  emitPermissionCheck(logEntry: AuditLogEntry) {
-    this.emit('permissionCheck', logEntry);
+  emitPermissionCheck(entry: AuditLogEntry) {
+    this.emit('permissionCheck', entry);
   }
 
   emitRoleAssignment(principalId: PrincipalId, role: Role) {
@@ -183,6 +279,10 @@ export class AuditEventEmitter extends EventEmitter {
 
   emitRoleRevocation(principalId: PrincipalId, role: Role) {
     this.emit('roleRevocation', { principalId, role, timestamp: new Date() });
+  }
+
+  emitResourcePermissionAssignment(resourceId: ResourceId, role: Role, permission: Permission) {
+    this.emit('resourcePermissionAssignment', { resourceId, role, permission, timestamp: new Date() });
   }
 
   emitPrincipalAddition(principal: Principal) {
@@ -248,6 +348,7 @@ export class RBAC {
   private principals: Map<PrincipalId, Principal>;
   private groups: Map<GroupId, Group>;
   private negativePermissions: Map<PrincipalId, Set<Permission>>;
+  private resourcePermissions: Map<string, Map<string, Set<Permission>>>;
   private conditionCheckers: Map<PrincipalId, Map<Permission, ConditionChecker[]>>;
   private logLevel: 'none' | 'basic' | 'detailed';
   public auditEmitter: AuditEventEmitter;
@@ -261,6 +362,7 @@ export class RBAC {
     this.principals = new Map();
     this.groups = new Map();
     this.negativePermissions = new Map();
+    this.resourcePermissions = new Map();
     this.conditionCheckers = new Map();
     this.logLevel = options?.logLevel ?? 'none';
     this.auditEmitter = new AuditEventEmitter();
@@ -275,7 +377,20 @@ export class RBAC {
       this.logLevel = options.logLevel;
     }
   }
-  
+
+  assignResourcePermission(resourceId: ResourceId, role: Role, permission: Permission): void {
+    const key = this.getResourceKey(resourceId);
+    if (!this.resourcePermissions.has(key)) {
+      this.resourcePermissions.set(key, new Map());
+    }
+    const rolePerms = this.resourcePermissions.get(key)!;
+    if (!rolePerms.has(role)) {
+      rolePerms.set(role, new Set());
+    }
+    rolePerms.get(role)!.add(permission);
+    this.auditEmitter.emitResourcePermissionAssignment(resourceId, role, permission);
+  }
+
   /**
    * Adds a new role with associated permissions and optional inheritance.
    * @param role - The name of the role to add.
@@ -378,13 +493,15 @@ export class RBAC {
    * @param principalId - The ID of the principal to get roles for.
    * @returns A set of all roles associated with the principal.
    */
-  private getPrincipalRoles(principalId: PrincipalId): Set<Role> {
+  getPrincipalRoles(principalId: PrincipalId): Set<Role> {
     const roles = new Set<Role>();
     const directRoles = this.principalRoles.get(principalId);
     if (directRoles) {
-      directRoles.forEach(role => roles.add(role));
+      directRoles.forEach(role => {
+        // roles.add(role)
+        this.addRoleAndAncestors(role, roles);
+      });
     }
-
     const principal = this.principals.get(principalId);
     if (principal && principal.type === 'group') {
       this.getGroupRoles(principal as Group, roles);
@@ -402,14 +519,16 @@ export class RBAC {
    */
   private getGroupRoles(group: Group, roles: Set<Role>): void {
     const groupRoles = this.principalRoles.get(group.id);
+
     if (groupRoles) {
-      groupRoles.forEach(role => roles.add(role));
+      groupRoles.forEach(role => {
+        // roles.add(role)
+        this.addRoleAndAncestors(role, roles);
+      });
     }
-    group.subgroups.forEach(subgroupId => {
-      const subgroup = this.groups.get(subgroupId);
-      if (subgroup) {
-        this.getGroupRoles(subgroup, roles);
-      }
+
+    this.getGroupsMemberOf(group.id).forEach(parentGroup => {
+      this.getGroupRoles(parentGroup, roles);
     });
   }
 
@@ -420,7 +539,7 @@ export class RBAC {
    */
   private getMemberOfGroupsRoles(principalId: PrincipalId, roles: Set<Role>): void {
     this.groups.forEach(group => {
-      if (group.members.has(principalId)) {
+      if (group.members.has(principalId) || group.subgroups.has(principalId)) {
         this.getGroupRoles(group, roles);
       }
     });
@@ -465,10 +584,18 @@ export class RBAC {
     if (!group) {
       throw new Error(`Group with id ${groupId} does not exist`);
     }
-    if (!this.principals.has(principalId)) {
+
+    const principal = this.principals.get(principalId);
+
+    if (!principal) {
       throw new Error(`Principal with id ${principalId} does not exist`);
     }
-    group.members.add(principalId);
+
+    if (principal && principal.type === 'group') {
+      this.addSubgroup(groupId, principal.id as GroupId)
+    } else {
+      group.members.add(principalId);
+    }
     this.auditEmitter.emitGroupAddition(groupId, principalId);
   }
 
@@ -485,6 +612,25 @@ export class RBAC {
       throw new Error('Both parent and child groups must exist');
     }
     parentGroup.subgroups.add(childGroupId);
+  }
+
+  /**
+   * Gets all roles associated with a principal, including inherited roles from groups.
+   * @param principalId - The ID of the principal to get roles for.
+   * @returns A set of all roles associated with the principal.
+   */
+  getGroupsMemberOf(principalId: PrincipalId): Set<Group> {
+    const groups = new Set<Group>();
+    // const directGroups = new Set<Group>();
+
+    this.groups.forEach(group => {
+      if (group.members.has(principalId) || group.subgroups.has(principalId)) {
+        this.addGroupAndAncestors(group, groups)
+        // directGroups.add(group)
+      }
+    });
+
+    return groups;
   }
 
   removeFromGroup(groupId: GroupId, principalId: PrincipalId): void {
@@ -571,53 +717,24 @@ export class RBAC {
    * @param context - Additional context for condition checking (e.g., IP address, current time).
    * @returns True if the principal has the permission and all conditions are met, false otherwise.
    */
-  hasPermission(principalId: PrincipalId, permission: Permission, context?: any): boolean {
+  hasPermission(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: any): boolean {
     let granted = false;
     let reason = '';
 
-    // Check for negative permissions
-    const deniedPermissions = this.negativePermissions.get(principalId);
-    if (deniedPermissions && deniedPermissions.has(permission)) {
+    if (this.isNegativePermission(principalId, permission, resourceId)) {
       reason = 'Explicitly denied';
       granted = false;
     } else {
-      // Check if the permission is granted by any role, including inherited roles
-      const principalRoles = this.getPrincipalRoles(principalId);
-      for (const role of principalRoles) {
-        const rolePermissions = this.getRolePermissions(role);
-        if (rolePermissions.has(permission)) {
-          granted = true;
-          reason = `Granted by role: ${role}`;
-          break;
-        }
-      }
-
-      // Check conditions if the permission is granted
-      if (granted) {
-        const principalCheckers = this.conditionCheckers.get(principalId);
-        if (principalCheckers) {
-          const permissionCheckers = principalCheckers.get(permission);
-          if (permissionCheckers) {
-            for (const checker of permissionCheckers) {
-              if (!checker.check(principalId, permission, context)) {
-                granted = false;
-                reason = `Denied by condition: ${checker.constructor.name}`;
-                break;
-              }
-            }
-          }
-        }
-      } else {
-        reason = 'No matching role found';
-      }
+      granted = this.checkPermissions(principalId, permission, resourceId, context);
+      reason = granted ? 'Permission granted' : 'Permission not found';
     }
 
-    // Log the permission check if auditing is enabled
     if (this.logLevel !== 'none') {
       const logEntry: AuditLogEntry = {
         timestamp: new Date(),
         principalId,
-        permission,
+        action: permission.action,
+        resourceId,
         granted,
         reason,
         ...(this.logLevel === 'detailed' ? { context } : {})
@@ -628,31 +745,116 @@ export class RBAC {
     return granted;
   }
 
+  private checkPermissions(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: any): boolean {
+    
+    // Check role-based permissions (including role hierarchy)
+    const principalRoles = this.getPrincipalRoles(principalId);
+    for (const role of principalRoles) {
+      if (this.roleHasPermission(principalId, role, permission, resourceId, context)) {
+        return true;
+      }
+    }
+
+    // Check resource-specific permissions
+    return this.resourceHasPermission(principalId, permission, resourceId, context);
+  }
+
+  private isNegativePermission(principalId: PrincipalId, permission: Permission, resourceId: ResourceId): boolean {
+    const negativePerms = this.negativePermissions.get(principalId);
+    if (negativePerms) {
+      return Array.from(negativePerms).some(negPerm =>
+        this.permissionMatches(negPerm, permission, resourceId)
+      );
+    }
+    return false;
+  }
+
+  private roleHasPermission(principalId: PrincipalId, role: Role, permission: Permission, resourceId: ResourceId, context?: any): boolean {
+    const roleDefinition = this.roles.get(role);
+    if (roleDefinition) {
+      return Array.from(roleDefinition.permissions).some(rolePerm =>
+        this.permissionMatches(rolePerm, permission, resourceId) &&
+        this.checkConditions(principalId, rolePerm, permission, resourceId, context)
+      );
+    }
+    return false;
+  }
+
+  private resourceHasPermission(principalId: PrincipalId, permission: Permission, resourceId: ResourceId, context?: any): boolean {
+    const resourceKey = this.getResourceKey(resourceId);
+    const resourcePerms = this.resourcePermissions.get(resourceKey);
+    if (resourcePerms) {
+      const principalRoles = this.getPrincipalRoles(principalId);
+      for (const [role, perms] of resourcePerms) {
+        if (principalRoles.has(role)) {
+          if (Array.from(perms).some(perm =>
+            this.permissionMatches(perm, permission, resourceId) &&
+            this.checkConditions(principalId, perm, permission, resourceId, context)
+          )) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private permissionMatches(grantedPerm: Permission, requestedPerm: Permission, resourceId: ResourceId): boolean {
+    return (grantedPerm.tenantId === '*' || grantedPerm.tenantId === requestedPerm.tenantId) &&
+      (grantedPerm.subscriptionId === '*' || grantedPerm.subscriptionId === requestedPerm.subscriptionId) &&
+      (grantedPerm.namespaceId === '*' || grantedPerm.namespaceId === requestedPerm.namespaceId) &&
+      (grantedPerm.resourceTypeId === '*' || grantedPerm.resourceTypeId === requestedPerm.resourceTypeId) &&
+      (grantedPerm.resourceId === '*' || grantedPerm.resourceId === requestedPerm.resourceId) &&
+      (grantedPerm.action === '*' || grantedPerm.action === requestedPerm.action);
+  }
+
+  private checkConditions(principalId: PrincipalId, grantedPerm: Permission, requestedPerm: Permission, resourceId: ResourceId, context?: any): boolean {
+    if (grantedPerm.conditions) {
+      return grantedPerm.conditions.every(condition =>
+        condition.check(principalId, requestedPerm, resourceId, context)
+      );
+    }
+    return true;
+  }
+
+  private addRoleAndAncestors(role: Role, roleSet: Set<Role>) {
+    if (!roleSet.has(role)) {
+      roleSet.add(role);
+      const roleDefinition = this.roles.get(role);
+      if (roleDefinition && roleDefinition.inherits) {
+        roleDefinition.inherits.forEach(parentRole => this.addRoleAndAncestors(parentRole, roleSet));
+      }
+    }
+  }
+
+  private addGroupAndAncestors(childGroup: Group, groupSet: Set<Group>) {
+    if (!groupSet.has(childGroup)) {
+      groupSet.add(childGroup);
+      this.groups.forEach(group => {
+        if (group.subgroups.has(childGroup.id)) {
+          this.addGroupAndAncestors(group, groupSet)
+        }
+      })
+    }
+  }
+
+  private getResourceKey(resource: Resource | ResourceId): string {
+    if ('tenantId' in resource && 'resourceTypeId' in resource && 'resourceId' in resource) {
+      return `rid:${resource.tenantId}:${resource.subscriptionId}:${resource.namespaceId}:${resource.resourceTypeId}:${resource.resourceId}`;
+    } else {
+      return `rid:${resource.tenantId}:${resource.subscriptionId}:${resource.namespaceId}:${resource.typeId}:${resource.id}`;
+    }
+  }
+
   /**
    * Creates a new RBAC instance with default roles.
    * @returns A new RBAC instance initialized with default roles.
    */
   static setupDefaultRoles(): RBAC {
     const rbac = new RBAC();
-    rbac.addRole('viewer', [DEFAULT.permissions.READ]);
-    rbac.addRole('editor', [DEFAULT.permissions.WRITE], ['viewer']);
-    rbac.addRole('manager', [DEFAULT.permissions.DELETE], ['editor']);
-    rbac.addRole('admin', [DEFAULT.permissions.ADMIN], ['manager']);
+    DEFAULT.roles.forEach(roleDefinition => {
+      rbac.addRole(roleDefinition.name, Array.from(roleDefinition.permissions), roleDefinition.inherits);
+    });
     return rbac;
   }
 }
-
-export const DEFAULT = {
-  permissions: {
-    READ: 'read',
-    WRITE: 'write',
-    DELETE: 'delete',
-    ADMIN: 'admin',
-  },
-  roles: new Map<Role, Permission[]>([
-    ['viewer', ['read']],
-    ['editor', ['read', 'write']],
-    ['manager', ['read', 'write', 'delete']],
-    ['admin', ['read', 'write', 'delete', 'admin']],
-  ]),
-};

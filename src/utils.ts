@@ -47,7 +47,3 @@ export function convertYesToBoolean(value: any): boolean {
   const normalizedValue = value.trim().toLowerCase();
   return ['yes', 'y', 'true', '1'].includes(normalizedValue);
 }
-
-export function uint8ArrayToString(array: Uint8Array): string {
-  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-}

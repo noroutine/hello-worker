@@ -5,7 +5,8 @@ import { MyDurableObject } from "./objects/mydurableobject";
 import { convertYesToBoolean, generateRandomAlphanumeric, isAbsoluteURL } from "./utils";
 import { SecureSession } from './session';
 import ViewFactory from './views';
-import { RBAC } from './rbac';
+import { buildRbac } from './rbac/counters_rbac';
+import { Permission, RBAC, ResourceId } from './rbac/rbac';
 
 /**
  * Welcome to Cloudflare Workers! This is your first Durable Objects application.
@@ -38,6 +39,7 @@ export interface Env {
   MY_DURABLE_OBJECT: DurableObjectNamespace<MyDurableObject>;
   COUNTERS: DurableObjectNamespace<Counter>;
   SESSIONS: DurableObjectNamespace<Session>;
+  INVENTORY: KVNamespace;
 
   //
   // Example binding to R2. Learn more at https://developers.cloudflare.com/workers/runtime-apis/r2/
@@ -68,43 +70,62 @@ export default {
     // determine if we are in dash
     let dashMode = env.DASH == url.hostname;
 
-    // determine god mode
-    let godMode = 
-      (env.GOD_MODE == "never" && false) || 
-      (env.GOD_MODE == "dash" && dashMode) ||
-      (env.GOD_MODE == "always");
-
     // determine tracking pixel
     let trackerName = convertYesToBoolean(env.TRACKER) && !dashMode ? url.hostname : '';
-
-    console.log(`God Mode: ${env.GOD_MODE},${godMode}, dash: ${env.DASH}, baseUrl: ${baseUrl}`);
 
     let name = url.searchParams.get("name");
     let dataUrl = "/";
 
-    // Fuck off
-    if (url.pathname === "/favicon.ico") {
-      return ViewFactory.NOT_FOUND;
-    }
-
     // object inventory
-    const INVENTORY = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName("counters"));
+    const DO_INVENTORY = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName("counters"));
 
     // handle session
-    let session = await SecureSession.fromRequest(request, env.SESSIONS, INVENTORY);
+    let session = await SecureSession.fromRequest(request, env.SESSIONS, DO_INVENTORY);
     if (session) {
       console.log('Reconstructed session:', session.toString());
     } else {
-      session = await SecureSession.createNew(env.SESSIONS, INVENTORY)
+      session = await SecureSession.createNew(request, env.SESSIONS, DO_INVENTORY)
       console.log(`Created new session: ${session.toString()}`);
     }
-    
+
+    // determine god mode
+    let godMode =
+      (env.GOD_MODE == "never" && false) ||
+      (env.GOD_MODE == "dash" && dashMode) ||
+      (env.GOD_MODE == "always");
+
+    if (godMode) {
+      session.transcend()
+    }
+
+    console.log(`God Mode: ${env.GOD_MODE},${session.god}, dash: ${env.DASH}, baseUrl: ${baseUrl}`);
+
+    // Initialize RBAC with default roles
+    const rbac = buildRbac()
+
     // construct view factory
-    const VIEW_FACTORY = new ViewFactory(session, RBAC.setupDefaultRoles(), godMode)
+    const VIEW_FACTORY = new ViewFactory(session, rbac)
 
     // now to business
-    let names = await INVENTORY.get(Counter.INVENTORY_KEY);
-    let sessions = await INVENTORY.get(Session.INVENTORY_KEY);
+    // Fuck off
+    // if (url.pathname === "/favicon.ico") {
+    //   return VIEW_FACTORY.notFound();
+    // }
+
+    let names = await DO_INVENTORY.get(Counter.INVENTORY_KEY);
+    env.INVENTORY.put(Counter.INVENTORY_KEY, JSON.stringify(names))
+
+    let sessions = await DO_INVENTORY.get(Session.INVENTORY_KEY);
+    env.INVENTORY.put(Session.INVENTORY_KEY, JSON.stringify(sessions))
+    // names.forEach(name => {
+    //   ['increment', 'read', 'delete'].forEach(action => {
+    //     if (canDo(session, rbac, action, name)) {
+    //       console.log(`🟢 ${session.principal.id} can ${action} ${name}`)
+    //     } else {
+    //       console.log(`🔴 ${session.principal.id} cannot ${action} ${name}`)
+    //     }
+    //   })
+    // })
 
     if (!name) {
       if (url.pathname === "/") {
@@ -117,7 +138,7 @@ export default {
 
           let redirectUrl: string = await redirectId.getDataUrl()
           if (redirectUrl == "/" || redirectUrl.length == 0 || redirectUrl == undefined) {
-            return ViewFactory.PIXEL;
+            return VIEW_FACTORY.pixel();
           } else if (isAbsoluteURL(redirectUrl)) {
             return Response.redirect(redirectUrl, 302)
           } else {
@@ -125,13 +146,13 @@ export default {
             return Response.redirect(baseUrl + redirectUrl, 302)
           }
         } else {
-          return ViewFactory.NOT_FOUND;
+          return VIEW_FACTORY.notFound();
         }
       }
     }
 
     // dash guard, only increment is allowed outside dash
-    if (!godMode && !["/", "/increment"].includes(url.pathname)) {
+    if (!session.god && !["/", "/increment"].includes(url.pathname)) {
       return Response.redirect(`https://${env.DASH}`, 302)
     }
 
@@ -139,7 +160,7 @@ export default {
     let counterStub: DurableObjectStub<Counter> = env.COUNTERS.get(counterId);
     let count: number
 
-    INVENTORY.add(Counter.INVENTORY_KEY, name);
+    DO_INVENTORY.add(Counter.INVENTORY_KEY, name);
     count = await counterStub.getCounterValue();
     dataUrl = await counterStub.getDataUrl();
 
@@ -154,7 +175,7 @@ export default {
         await counterStub.updateData(url.searchParams.get("url") || "/");
         break;
       case "/delete":
-        await INVENTORY.delete(Counter.INVENTORY_KEY, name);
+        await DO_INVENTORY.delete(Counter.INVENTORY_KEY, name);
         await counterStub.delete();
         return Response.redirect(baseUrl, 302);
       case "/trace":
@@ -162,9 +183,31 @@ export default {
       case "/":
         return VIEW_FACTORY.createCounterView(names, sessions, name, count, dataUrl, trackerName);
       default:
-        return ViewFactory.NOT_FOUND;
+        return VIEW_FACTORY.notFound();
     }
 
     return Response.redirect(`${baseUrl}?name=${name}`, 302);
   },
 } satisfies ExportedHandler<Env>;
+
+function canDo(session: SecureSession, rbac: RBAC, action: string, counterName: string): boolean {
+  const permission: Permission = { 
+    action,
+    tenantId: 'noroutine',
+    subscriptionId: '*',
+    namespaceId: 'system',
+    resourceTypeId: 'counter',
+    resourceId: counterName,
+    effect: 'allow'
+  };
+
+  const resourceId: ResourceId = {
+    tenantId: 'noroutine',
+    subscriptionId: 'system',
+    namespaceId: 'system',
+    resourceTypeId: 'counter',
+    resourceId: counterName
+  }
+
+  return rbac.hasPermission(session.principal.id, permission, resourceId, null)
+}

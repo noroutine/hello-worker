@@ -1,9 +1,10 @@
-import { DurableObjectId } from './../node_modules/@cloudflare/workers-types/2022-01-31/index';
-import { randomBytes } from 'node:crypto';
+// import { randomBytes } from 'node:crypto';
 import { Session } from './objects/session';
-import { deserializePublicKey } from './ec-crypto';
+// import { deserializePublicKey } from './ec-crypto';
 import { checkDurableObjectExists } from './utils';
 import { MyDurableObject } from './objects/mydurableobject';
+import { Permission, Principal, Subscription, Tenant, User } from './rbac/rbac';
+import { getSubscription, getTenant, SUBSCRIPTIONS } from './subscription';
 
 export const SESSION_COOKIE_ID = "NSESSIONID";
 export const SESSION_COOKIE_KEY = "NSESSIONKEY";
@@ -15,6 +16,9 @@ export class SecureSession {
   private readonly _publicKey: string;
   private _encryptedData: string;
   private _sessionDO: DurableObjectNamespace<Session>;
+  private _principal: Principal;
+  private readonly _tenant: Tenant;
+  private readonly _subscription: Subscription;
 
   /**
    * Creates a new SecureSession instance.
@@ -22,12 +26,15 @@ export class SecureSession {
    * @param publicKey The public key for the session. If not provided, a placeholder value is used.
    * @param encryptedData The initial encrypted data for the session. If not provided, an empty string is used.
    */
-  constructor(sessionDO: DurableObjectNamespace<Session>, id?: string, publicKey: string = '', encryptedData: string = '') {
+  constructor(tenant: Tenant, subscription: Subscription, sessionDO: DurableObjectNamespace<Session>, id?: string, publicKey: string = '', encryptedData: string = '') {
     this._sessionDO = sessionDO
     this._id = id ? this._sessionDO.idFromString(id) : this.generateSessionId();
     this._persisted = false;
     this._publicKey = publicKey;
     this._encryptedData = encryptedData;
+    this._principal = { id: "anonymous", type: "user", username: "anonymous" } as User;
+    this._tenant = tenant;
+    this._subscription = subscription;
   }
 
   /**
@@ -67,6 +74,52 @@ export class SecureSession {
   }
 
   /**
+   * Sets new principal the session.
+   * @@returns session principal
+   */
+  set principal(principal: Principal) {
+    this._principal = principal;
+  }
+
+  /**
+   * Gets session principal for the session.
+   * @param newData The new encrypted data to set.
+   */
+  get principal(): Principal {
+    return this._principal
+  }
+
+  /**
+   * Gets tenant for the session.
+   * @param newData The new encrypted data to set.
+   */
+  get tenant(): Tenant {
+    return this._tenant
+  }
+
+  /**
+   * Gets subscription for the session.
+   * @param newData The new encrypted data to set.
+   */
+  get subscription(): Subscription {
+    return this._subscription
+  }
+
+  /**
+   * Become god for this session
+   */
+  transcend() {
+    this._principal = { id: "god", type: "user", username: "great_maker" } as User;
+  }
+
+  /**
+   * Become god for this session
+   */
+  get god(): boolean {
+    return (this._principal as User).id === "god";
+  }
+
+  /**
    * Generates a random session ID.
    * @returns A random session ID.
    */
@@ -96,6 +149,8 @@ export class SecureSession {
      * @returns A SecureSession object if all required cookies are present, null otherwise
      */
   static async fromRequest(request: Request, _sessionDO: DurableObjectNamespace<Session>, inventory: DurableObjectStub<MyDurableObject>): Promise<SecureSession | null> {
+    let url = new URL(request.url);
+
     const cookieString = request.headers.get('Cookie') || '';
     const cookies = Object.fromEntries(
       cookieString.split('; ').map(pair => pair.split('=').map(decodeURIComponent))
@@ -106,7 +161,7 @@ export class SecureSession {
     const sessionEncryptedData = cookies[SESSION_COOKIE_DATA] || '';
 
     if (sessionId) {
-      const reconstructedSecureSession = new SecureSession(_sessionDO, sessionId, sessionPublicKey, sessionEncryptedData);
+      const reconstructedSecureSession = new SecureSession(getTenant(url.hostname), getSubscription(url.hostname), _sessionDO, sessionId, sessionPublicKey, sessionEncryptedData);
       if (await reconstructedSecureSession.validate(inventory)) {
         console.log(`Session ${reconstructedSecureSession._id} is valid`)
       } else {
@@ -123,8 +178,9 @@ export class SecureSession {
    * @param request Cloudflare Workers Request object
    * @returns A SecureSession object with unique Id
    */
-  static async createNew(_sessionDO: DurableObjectNamespace<Session>, inventory: DurableObjectStub<MyDurableObject>): Promise<SecureSession> {
-    return new SecureSession(_sessionDO)
+  static async createNew(request: Request, _sessionDO: DurableObjectNamespace<Session>, inventory: DurableObjectStub<MyDurableObject>): Promise<SecureSession> {
+    let url = new URL(request.url);
+    return new SecureSession(getTenant(url.hostname), getSubscription(url.hostname), _sessionDO)
   }
 
   /**
