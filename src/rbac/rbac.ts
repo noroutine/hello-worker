@@ -52,6 +52,7 @@ export type Role = string;
 export type TenantId = string;
 export type SubscriptionId = string;
 export type NamespaceId = string;
+export type ResourceTypeId = string;
 export type PrincipalId = string;
 export type GroupId = string;
 
@@ -81,10 +82,10 @@ export interface Resource {
 }
 
 export interface ResourceId {
-  tenantId: string;
-  subscriptionId: string;
-  namespaceId: string;
-  resourceTypeId: string;
+  tenantId: TenantId;
+  subscriptionId: SubscriptionId;
+  namespaceId: NamespaceId;
+  resourceTypeId: ResourceTypeId;
   resourceId: string;
 }
 

@@ -14,7 +14,7 @@ const sHelloCounters = {
 const sNoroutineShortener = {
   id: 'nrtn.me',
   tenantId: 'noroutine',
-  name: 'Hello Counters'
+  name: 'Noroutine Counters'
 }
 
 const sUnknown = {
@@ -23,12 +23,12 @@ const sUnknown = {
   name: 'unknown'
 }
 
-const TENANTS = new Map<string, Tenant>([
+export const TENANTS = new Map<string, Tenant>([
   ['nrtn.me', tNoroutine],
   ['hello.myworkers.cc', tNoroutine],
 ]);
 
-const SUBSCRIPTIONS = new Map<string, Subscription>([
+export const SUBSCRIPTIONS = new Map<string, Subscription>([
   ['dash.nrtn.me', sNoroutineShortener],
   ['nrtn.me', sNoroutineShortener],
   ['hello.myworkers.cc', sHelloCounters],

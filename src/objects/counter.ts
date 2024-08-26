@@ -1,10 +1,13 @@
+import { Deletable } from './../durableobjectinventory';
 import { DurableObject } from "cloudflare:workers";
+import { ResourceTypeId } from "../rbac/rbac";
 
 // Durable Counter Object
-export class Counter extends DurableObject {
+export class Counter extends DurableObject implements Deletable {
   
   // historically it is "value", do not change for now
-  public static readonly INVENTORY_KEY = "value";
+  public static readonly INVENTORY_ID = "counters";
+  public static readonly RESOURCE_TYPE: ResourceTypeId = "counter";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -13,6 +16,10 @@ export class Counter extends DurableObject {
   async trace() {
     const res = await fetch("https://www.cloudflare.com/cdn-cgi/trace");
     return await res.text();
+  }
+
+  async setCounterValue(value: number): Promise<void> {
+    await this.ctx.storage.put("value", value);
   }
 
   async getCounterValue(): Promise<number> {

@@ -67,7 +67,6 @@ TRACKER = "yes"
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#durable-objects
 [durable_objects]
 bindings = [
-  { name = "MY_DURABLE_OBJECT", class_name = "MyDurableObject" },
   { name = "COUNTERS", class_name = "Counter" },
   { name = "SESSIONS", class_name = "Session" }
 ]
@@ -83,8 +82,8 @@ bindings = [
 # new_classes = [ "Counter" ]
 
 [[migrations]]
-tag = "v4"
-new_classes = [ "Session" ]
+tag = "v7"
+# new_classes = [ "Counter", "Session" ]
 
 # Bind a Hyperdrive configuration. Use to accelerate access to your existing databases from Cloudflare Workers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#hyperdrive
@@ -96,7 +95,7 @@ new_classes = [ "Session" ]
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#kv-namespaces
 [[kv_namespaces]]
 binding = "INVENTORY"
-id = "155498bd982241808e944fada7c1b310"
+id = "d729ab3637804a2bb517d85cad288ac4"
 
 # Bind an mTLS certificate. Use to present a client certificate when communicating with another service.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#mtls-certificates

@@ -1,56 +1,24 @@
-import { Subscription } from '../rbac/rbac';
 import { SecureSession } from './../session';
 
-function ifGod(str: string, godMode: boolean): string {
-    return godMode ? str : "";
-}
-
-export function CounterView(session: SecureSession, names: string[], sessions: string[], subscriptions: Subscription[], subscriptionOverride: Subscription | undefined, name: string = "", count: number = 0, dataUrl: string = "/", godMode: boolean = false, tracker: string = ''): string {
-    let countSnippet = "";
-    if (name) {
-        countSnippet = `<p>Count: ${count}</p>`;
-    }
-
+export function SessionsView(session: SecureSession, names: string[] = [], name: string = ""): string {
     let namesList = names.map(name =>
         `<li style="margin: 0.5em">` +
-        `<a class="op-link" href="/-/counters/?name=${name}">⚙️</a>` +
-        `<a class="op-link" href="/-/counters/increment?name=${name}">➕</a>` +
-        ifGod(`<a class="op-link" href="/-/counters/decrement?name=${name}">➖</a>`, godMode) +
-        ifGod(`<a class="op-link" href="/-/counters/trace?name=${name}">🔎</a>`, godMode) +
-        ifGod(`<a class="op-link op-danger" style="" href="/-/counters/delete?name=${name}">❌</a>`, godMode) +
-        `<a class="op-link" href="/${name}">🔗</a>` +
-        `<a class="op-link copy-link" href="/${name}">📑</a>` +
+        `<a class="op-link" href="/-/sessions/?name=${name}">⚙️</a>` +
+        // `<a class="op-link" href="/-/sessions/trace?name=${name}">🔎</a>` +
+        `<a class="op-link op-danger" style="" href="/-/sessions/delete?name=${name}">❌</a>` +
+        `<a class="op-link copy-link" href="/-/sessions/?name=${name}">📑</a>` +
         `<span style="margin-left: 1em;"><code>${name}</code></span>` +
         `<span class="name-message"></span>` +
         `</li>`
     ).join('')
 
-    let sessionsList = sessions.map(name =>
-        `<li style="margin: 0.5em">` +
-        `<a href="/-/sessions/?name=${name}" style="margin-left: 1em;"><code>${name}</code></a>` +
-        `</li>`
-    ).join('')
-
-    let subscriptionsList = subscriptions.map(s =>
-        `<li style="margin: 0.5em">` +
-        `<a href="/-/counters/?subscription=${s.id}" style="margin-left: 1em;"><code>${s.name}</code></a>` +
-        `</li>`
-    ).join('')
-
-    let countersSnippet = names.length > 0 ? `<p>Known counters:<ul style="list-style: none; padding-left: 0;">${namesList}</ul></p>` : `<p>No counters yet</p>` ;
     let currentSessionSnippet = `<p>Session ID: <code>${session.id}</code>, Persisted: <code>${session.persisted}</code></p>`
     let currentSubscriptionSnippet = `<p>Subscription ID: <code>${session.subscription.id}</code>, Name: <code>${session.subscription.name}</code></p>`
-    let overrideSubscriptionSnippet = subscriptionOverride ? `<p>Subscription Override ID: <code>${subscriptionOverride.id}</code>, Name: <code>${subscriptionOverride.name}</code></p>` : ''
-    let sessionsListSnippet = sessions.length > 0 ? `<p><a href="/-/sessions/">Known persisted sessions</a>: <ul style="list-style: none; padding-left: 0;">${sessionsList}</ul></p>` : `<p>No persisted sessions</p>`
-    let subscriptionsListSnippet = `<p>Subscriptions: <ul style="list-style: none; padding-left: 0;">${subscriptionsList}</ul></p>`
-    let performanceSnippet = `<p>Request performance: <code>${(performance.now() - session.startTime).toFixed(2)}ms</code></p>`
-
-    let pixel = (tracker) ? `<img src="https://nrtn.me/${tracker}" />`: '';
 
     return `<!DOCTYPE html>
 <html>
 <head>
-    <title>Counters</title>
+    <title>Sessions</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -121,27 +89,18 @@ export function CounterView(session: SecureSession, names: string[], sessions: s
     </style>
 </head>
 <body>
-    <h1><a href="/-/">Home</a> :: <a href="/-/counters/">Counters</a></h1>
-    <p>Select a Durable Object to contact by using the <code>name</code> URL query string parameter, for example, <code>?name=A</code></p>
-    <p>Controls below will do exactly that for you</p>
+    <h1><a href="/-/">Home</a> :: <a href="/-/sessions/">Sessions</a></h1>
     <form action="/" method="get">
         <label for="name">Name:</label><input type="text" id="name" name="name" value="${name}" />
-        ${ifGod(`<label for="url">URL:</label><input type="text" id="url" name="url" value="${dataUrl}" />`, godMode)}
-        <input id="increment" type="submit" class="btn" formaction="/-/counters/increment" value="Increment" />
-        ${ifGod(`<input id="decrement" type="submit" class="btn" formaction="/-/counters/decrement" value="Decrement">`, godMode)}
-        ${ifGod(`<input id="update" type="submit" class="btn" formaction="/-/counters/update" value="Update">`, godMode)}
-        ${ifGod(`<input id="trace" type="submit" class="btn" formaction="/-/counters/trace" value="Trace" />`, godMode)}
-        ${ifGod(`<input id="delete" type="submit" class="btn btn-danger" formaction="/-/counters/delete" value="Delete" />`, godMode)}
-        ${countSnippet}
+        <input id="trace" type="submit" class="btn" formaction="/-/sessions/trace" value="Trace" />
+        <input id="delete" type="submit" class="btn btn-danger" formaction="/-/sessions/delete" value="Delete" />
     </form>
-
-    ${countersSnippet}
+    <p>Known sessions:
+    <ul style="list-style: none; padding-left: 0;">${namesList}</ul>
+    </p>
+    
     ${currentSessionSnippet}
     ${currentSubscriptionSnippet}
-    ${performanceSnippet}
-    ${ifGod(overrideSubscriptionSnippet, godMode)}
-    ${ifGod(sessionsListSnippet, godMode)}
-    ${ifGod(subscriptionsListSnippet, godMode)}
 
     <script>
         // Function to copy link to clipboard
@@ -180,7 +139,6 @@ export function CounterView(session: SecureSession, names: string[], sessions: s
             });
         });
     </script>
-    ${pixel}
 </html>
 `;
 };

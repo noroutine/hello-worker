@@ -1,30 +1,23 @@
+import { getSubscription, SUBSCRIPTIONS } from './../subscription';
 import { RBAC } from "../rbac/rbac";
 import { SecureSession } from "../session";
 import { CounterView } from "./counter";
+import { SessionsView } from "./session";
 import { TraceView } from "./trace";
 
 export default class ViewFactory {
-  private readonly _rbac: RBAC;
-  private readonly _session: SecureSession;
-
   /**
    * Creates a new ViewFactory instance.
    * @param session session instance
    * @param rbac rbac instance
    * @param godMode override all restrictions
    */
-  constructor(session: SecureSession, rbac: RBAC) {
-    this._session = session;
-    this._rbac = rbac;
-  }
-
-  ifGod(str: string): string {
-    return this._session.god ? str : "";
+  constructor() {
   }
 
   // Define a response for HTML content
-  HTMLResponse(view: string) {
-    return this._session.setSessionCookies(new Response(view, { headers: { "Content-Type": "text/html;charset=UTF-8" } }));
+  HTMLResponse(session: SecureSession, view: string) {
+    return session.setSessionCookies(new Response(view, { headers: { "Content-Type": "text/html;charset=UTF-8" } }));
   }
 
   // Define a response for PNG content
@@ -58,8 +51,8 @@ export default class ViewFactory {
    * @param request Cloudflare Workers Request object
    * @returns A SecureSession object with unique Id
    */
-  createTraceView(data: string = ""): Response {
-    return this.HTMLResponse(TraceView(data));
+  createTraceView(session: SecureSession, data: string = ""): Response {
+    return this.HTMLResponse(session, TraceView(data));
   }
 
   /**
@@ -67,8 +60,22 @@ export default class ViewFactory {
    * @param request Cloudflare Workers Request object
    * @returns A SecureSession object with unique Id
    */
-  createCounterView(names: string[], sessions: string[], name: string = "", count: number = 0, dataUrl: string = "/", tracker: string = ''): Response  {
-    return this.HTMLResponse(CounterView(this._session, names, sessions, name, count, dataUrl, this._session.god, tracker))
+  createCounterView(session: SecureSession, names: string[], sessions: string[], name: string = "", count: number = 0, dataUrl: string = "/", tracker: string = ''): Response  {
+    let subscriptionOverrideId
+    try {
+      subscriptionOverrideId = JSON.parse(session.encryptedData).subscriptionOverride;
+    } catch {}
+    let subscriptionOverride = subscriptionOverrideId ? getSubscription(subscriptionOverrideId) : undefined;
+    return this.HTMLResponse(session, CounterView(session, names, sessions, Array.from(new Set(SUBSCRIPTIONS.values())), subscriptionOverride, name, count, dataUrl, session.god, tracker))
   }
 
+  /**
+   * Creates a new SessionsView instance
+   * @param request Cloudflare Workers Request object
+   * @returns A SecureSession object with unique Id
+   */
+  createSessionsView(session: SecureSession, names: string[], name: string = ""): Response  {
+    return this.HTMLResponse(session, SessionsView(session, names, name))
+  }
+  
 }
